@@ -4,15 +4,15 @@ import Peer from "simple-peer";
 
 const SocketContext = createContext();
 
-const socket = io("http://localhost:8000/");
+const socket = io("http://localhost:8000");
 
 const SocketProvider = ({ children }) => {
-    const [stream, setStream] = useState(null);
-    const [userId, setUserId] = useState("");
-    const [call, setCall] = useState({});
     const [callAccepted, setCallAccepted] = useState(false);
     const [callEnded, setCallEnded] = useState(false);
+    const [stream, setStream] = useState(null);
     const [name, setName] = useState("");
+    const [call, setCall] = useState({});
+    const [userId, setUserId] = useState("");
 
     const myVideo = useRef();
     const userVideo = useRef();
@@ -22,33 +22,63 @@ const SocketProvider = ({ children }) => {
         navigator.mediaDevices.getUserMedia({ video: true, audio: true })
             .then((currentStream) => {
                 setStream(currentStream);
-                myVideo.current.srcObject = currentStream;
+
+                if (myVideo.current) {
+                    myVideo.current.srcObject = currentStream;
+                }
             })
-            .catch(err => {
-                console.error(err);
-            });
+            .catch(error => console.error("Error accessing media devices.", error));
 
-        socket.on("me", (id) => {
-            setUserId(id);
-        });
+        socket.on("me", (id) => setUserId(id));
 
-        socket.on("calluser", ({ from, name: callerName, signal }) => {
-            setCall({ isReceivedCall: true, from, name: callerName, signal });
+        socket.on("callUser", ({ from, name: callerName, signal }) => {
+            setCall({ isReceivingCall: true, from, name: callerName, signal });
         });
     }, []);
+
+    const answerCall = () => {
+        if (!stream) {
+            console.error("Stream is not available");
+            return;
+        }
+
+        setCallAccepted(true);
+
+        const peer = new Peer({ initiator: false, trickle: false, stream });
+
+        peer.on("signal", (data) => {
+            socket.emit("answerCall", { signal: data, to: call.from });
+        });
+
+        peer.on("stream", (currentStream) => {
+            if (userVideo.current) {
+                userVideo.current.srcObject = currentStream;
+            }
+        });
+
+        if (call.signal) {
+            peer.signal(call.signal);
+        } else {
+            console.error("Call signal is not available");
+        }
+
+        connectionRef.current = peer;
+    };
 
     const callUser = (id) => {
         const peer = new Peer({ initiator: true, trickle: false, stream });
 
         peer.on("signal", (data) => {
-            socket.emit("calluser", { userToCall: id, signalData: data, from: userId, name });
+            socket.emit("callUser", { userToCall: id, signalData: data, from: userId, name });
         });
 
         peer.on("stream", (currentStream) => {
-            userVideo.current.srcObject = currentStream;
+            if (userVideo.current) {
+                userVideo.current.srcObject = currentStream;
+            }
         });
 
-        socket.on("callaccepted", (signal) => {
+        socket.on("callAccepted", (signal) => {
             setCallAccepted(true);
             peer.signal(signal);
         });
@@ -56,27 +86,12 @@ const SocketProvider = ({ children }) => {
         connectionRef.current = peer;
     };
 
-    const answerCall = () => {
-        setCallAccepted(true);
-
-        const peer = new Peer({ initiator: false, trickle: false, stream });
-
-        peer.on("signal", (data) => {
-            socket.emit("answercall", { signal: data, to: call.from });
-        });
-
-        peer.on("stream", (currentStream) => {
-            userVideo.current.srcObject = currentStream;
-        });
-
-        peer.signal(call.signal);
-        connectionRef.current = peer;
-    };
-
     const leaveCall = () => {
         setCallEnded(true);
 
-        connectionRef.current.destroy();
+        if (connectionRef.current) {
+            connectionRef.current.destroy();
+        }
         window.location.reload();
     };
 
